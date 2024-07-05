@@ -1,0 +1,177 @@
+---
+title: ""
+author: "Bret Staudt Willet"
+date: "2024-07-05"
+output: html_document
+---
+
+## Set Up Virtual Environment
+
+In Terminal:
+- (If necessary) update pip -$:           pip install --upgrade pip
+- (If necessary) remove previous - $:     rm -rf ~/myenv
+- (If necessary) clear cache - $:         pip cache purge
+- Create a virtual environment - $:       /usr/local/bin/python3 -m venv ~/myenv
+- Set the Python libraries path - $:      /usr/local/bin/python3 -m pip config set global.target ~/myenv/lib/python3.12/site-packages
+
+
+## Activate Virtual Environment
+
+- Activate the virtual environment - $:   source ~/myenv/bin/activate
+- Check the Python path - $:              which python3 pip
+- Check the Python version - $:           python3 -m pip --version <OR> python -V
+- Check the pip version - $:              python3 -m pip --version <OR> pip -V
+
+
+## Install Necessary Packages
+
+- Check the Python library path - $:      otool -L ~/myenv/bin/python
+- Install necessary packages - $:         pip install numpy pandas bs4 serpapi setuptools wheel
+- Install necessary packages - $:         pip install google-search-results
+- Verify the installed packages - $:      pip show google-search-results
+- Verify the installed packages - $:      pip list
+
+
+
+```{r setup, message=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+
+#Sys.setenv(RETICULATE_PYTHON = "~/myenv/bin/python")
+library(reticulate)
+```
+
+```{r api-key, message=FALSE}
+serpapi_key <- Sys.getenv('SERPAPI_KEY')
+```
+
+## Indicate Specific Conda Environment for Python
+
+```{r set_python_env}
+#reticulate::py_discover_config()
+
+# Paste the local Python path here:
+#reticulate::use_python_version("/Library/Frameworks/Python.framework/Versions/3.12/bin/python3")
+reticulate::use_virtualenv("~/myenv", required = TRUE)
+
+# Check the Python setup
+reticulate::py_config()
+```
+
+## Import Python Packages
+
+```{python packages}
+import pandas as pd
+import serpapi
+import os, json
+#import bs4 as BeautifulSoup
+#import requests
+```
+
+Also check to make sure Python is working as expected.
+
+```{python test}
+data = {"calories": [420, 380, 390], "duration": [50, 40, 45]}
+df = pd.DataFrame(data)
+print(df); print(r.serpapi_key)
+```
+
+
+### Set Up SerpApi GoogleSearch
+
+See https://serpapi.com/integrations/python
+https://pypi.org/project/google-search-results/
+
+## Collect Google Scholar Data with SerpApi
+
+```{python params-setup}
+params = {
+  "api_key": r.serpapi_key,
+  "engine": "google_scholar",
+  "q": "source:'international journal of self-directed learning'",
+  "hl": "en",
+  "start": 0
+}
+```
+
+```{python simple-collection-serpapi}
+search = serpapi.search(params)
+results = search.as_dict()['organic_results']
+```
+
+```{python advanced-collection-serpapi}
+google_scholar_results = []
+
+while True:
+    search = serpapi.search(params)  # where data extraction happens on the SerpApi backend
+    result_dict = search.as_dict()  # JSON -> Python dict
+
+    if 'error' in result_dict:
+        break
+    
+    for result in result_dict['organic_results']:
+        google_scholar_results.append(result)
+
+    params['start'] += 10
+    #time.sleep(2)
+```
+
+```{python show-results}
+print(json.dumps(results, indent=2, ensure_ascii=False))
+```
+
+```{r define-extract-function, message=FALSE}
+# Function to extract author list, journal, and publication year
+extract_details <- 
+  function(summary) {
+    # Extract author list (part before the first dash)
+    author_list <- str_trim(str_extract(summary, "^[^-]+"))
+    
+    # Extract publication year (last 4 digits before another element)
+    publication_year <- str_extract(summary, "\\b\\d{4}\\b")
+    
+    # Extract journal name (portion between first dash and year)
+    journal <- str_trim(str_replace(summary, paste0("^", author_list, "\\s+-\\s+"), ""))
+    journal <- str_trim(str_replace(journal, paste0(",\\s+", publication_year, "\\s+-\\s+.*$"), ""))
+    
+    list(author_list = author_list, journal = journal, publication_year = publication_year)
+  }
+```
+
+```{r results, message=FALSE}
+pub_list <- 
+  #py$results
+  py$google_scholar_results
+
+# Transform the data into a formatted tibble
+pub_tibble <- 
+  lapply(pub_list, function(item) {
+    # Get details of the first author
+    first_author <- item$publication_info$authors[[1]]
+    
+    # Extract additional details from summary
+    details <- extract_details(item$publication_info$summary)
+    
+    # Create an entry for the tibble
+    tibble(
+      title = item$title,
+      author_list = details$author_list,
+      publication_year = details$publication_year,
+      cited_by = item$inline_links$cited_by$total,
+      journal = details$journal,
+      type = item$type,
+      first_author_name = first_author$name,
+      author_link = first_author$link,
+      author_id = first_author$author_id,
+      summary = item$publication_info$summary,
+      snippet = item$snippet,
+      link = item$link,
+      result_id = item$result_id
+    )
+  }) %>%
+  bind_rows()
+```
+
+```{r export, message=FALSE}
+write_csv(pub_tibble, "results/ijsdl-articles-2023.csv")
+```
